@@ -1,0 +1,192 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+name: testflight
+
+# Every merge to main uploads to TestFlight automatically, but only when the
+# merged pull request was authored by the repository owner (johnarleyburns).
+# Direct pushes and PRs from anyone else are skipped. A manual dispatch is
+# allowed for the owner only.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Owner-authored merge gate
+    if: github.repository == 'johnarleyburns/advocatra-ios'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      allowed: ${{ steps.check.outputs.allowed }}
+    steps:
+      - name: Require a merged PR authored by johnarleyburns
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          allowed=false
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ "$ACTOR" = "johnarleyburns" ]; then allowed=true; fi
+          else
+            authors="$(gh api "repos/$REPO/commits/$SHA/pulls" \
+              --jq '.[] | select(.merged_at != null) | .user.login' 2>/dev/null || true)"
+            if printf '%s\n' "$authors" | grep -qx 'johnarleyburns'; then
+              allowed=true
+            fi
+          fi
+          echo "allowed=$allowed" >> "$GITHUB_OUTPUT"
+          if [ "$allowed" != "true" ]; then
+            echo "::notice title=TestFlight skipped::No merged pull request by johnarleyburns for $SHA."
+          fi
+
+  upload:
+    name: Archive and upload
+    needs: gate
+    if: needs.gate.outputs.allowed == 'true'
+    runs-on: xcode-27
+    timeout-minutes: 45
+    environment:
+      name: ios-release
+      url: https://appstoreconnect.apple.com
+    env:
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+      BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+      BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+      DEVELOPMENT_TEAM_ID: ${{ secrets.DEVELOPMENT_TEAM_ID }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+      # Name of the App Store distribution profile installed by the import step.
+      PROVISIONING_PROFILE_NAME: Advocatra Profile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select Xcode 27
+        run: |
+          sudo xcode-select -s /Applications/Xcode_27.2.app
+          xcodebuild -version
+      - name: Preflight secrets
+        id: preflight
+        run: |
+          set -euo pipefail
+          required=(
+            APP_STORE_CONNECT_KEY_ID
+            APP_STORE_CONNECT_ISSUER_ID
+            APP_STORE_CONNECT_API_KEY_P8_BASE64
+            BUILD_CERTIFICATE_BASE64
+            BUILD_PROVISION_PROFILE_BASE64
+            DEVELOPMENT_TEAM_ID
+            KEYCHAIN_PASSWORD
+            P12_PASSWORD
+          )
+          missing=0
+          for name in "${required[@]}"; do
+            if [ -z "${!name}" ]; then
+              echo "::notice title=TestFlight skipped::$name is not configured"
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 0 ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Guards
+        run: |
+          bash scripts/check-swift6.sh
+          bash scripts/check-observable.sh
+          bash scripts/check-spdx.sh
+          bash scripts/check-seams.sh
+          bash scripts/check-licenses.sh
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Import signing identity
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/advocatra.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/build.p12"
+          security import "$RUNNER_TEMP/build.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          printf '%s' "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode \
+            > "$HOME/Library/MobileDevice/Provisioning Profiles/advocatra.mobileprovision"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+      - name: Archive
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          build_number="$(git rev-list --count HEAD)"
+          xcodebuild archive \
+            -project Advocatra.xcodeproj \
+            -scheme Advocatra \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Advocatra.xcarchive" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_NAME" \
+            MARKETING_VERSION="0.1.0" \
+            CURRENT_PROJECT_VERSION="$build_number" \
+            ADVOCATRA_SOURCE_COMMIT="$(git rev-parse HEAD)"
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>teamID</key><string>${DEVELOPMENT_TEAM_ID}</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>guru.parso.advocatra</key><string>${PROVISIONING_PROFILE_NAME}</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+      - name: Upload to TestFlight
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/appstore"
+          printf '%s' "$APP_STORE_CONNECT_API_KEY_P8_BASE64" | base64 --decode \
+            > "$RUNNER_TEMP/appstore/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Advocatra.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/appstore/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8" \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
+      - name: Record human QA requirement
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          echo "::notice title=TestFlight uploaded::Install the exact build on the owner's iPhone and record device, OS, scenario and pass/fail on the tracking issue."
