@@ -43,8 +43,17 @@ jobs:
           if [ "$EVENT" = "workflow_dispatch" ]; then
             if [ "$ACTOR" = "johnarleyburns" ]; then allowed=true; fi
           else
-            authors="$(gh api "repos/$REPO/commits/$SHA/pulls" \
-              --jq '.[] | select(.merged_at != null) | .user.login' 2>/dev/null || true)"
+            # GitHub's commit->PR association can lag a few seconds behind
+            # the merge that triggered this very push event (observed: a
+            # query 6s after merge returned no association, the same query
+            # moments later did). Retry briefly before concluding "no PR".
+            authors=""
+            for attempt in 1 2 3 4 5; do
+              authors="$(gh api "repos/$REPO/commits/$SHA/pulls" \
+                --jq '.[] | select(.merged_at != null) | .user.login' 2>/dev/null || true)"
+              if [ -n "$authors" ]; then break; fi
+              sleep 5
+            done
             if printf '%s\n' "$authors" | grep -qx 'johnarleyburns'; then
               allowed=true
             fi
