@@ -49,6 +49,7 @@ jobs:
             # moments later did). Retry briefly before concluding "no PR".
             authors=""
             for attempt in 1 2 3 4 5; do
+              echo "Looking up the merged PR for $SHA (attempt $attempt)..."
               authors="$(gh api "repos/$REPO/commits/$SHA/pulls" \
                 --jq '.[] | select(.merged_at != null) | .user.login' 2>/dev/null || true)"
               if [ -n "$authors" ]; then break; fi
