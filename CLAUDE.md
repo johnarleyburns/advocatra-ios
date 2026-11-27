@@ -23,30 +23,51 @@ representation case management tool. The web/cloud track is
   types. No Foundation DOM-XML classes (`XMLDocument`/`XMLElement`); if the
   vault format ever needs XML, hand-roll it the way Saldima's
   `cross-platform-api-verification` lesson requires.
-- **Bundle ID** `guru.parso.advocatra` (reusing the existing `guru.parso`
-  prefix) — unconfirmed assumption, cheap to change before any App Store
-  Connect record exists.
-- **Project generation:** XcodeGen `project.yml` will be added once the app
-  target exists; not yet in this scaffold.
+- **Bundle ID** `guru.parso.advocatra` — confirmed: matches the real App ID
+  and App Store Connect record the owner created (Team ID `3264Y8YUGV`).
+- **Project generation:** XcodeGen `project.yml` → `Advocatra.xcodeproj`.
+  Never hand-edit the generated project; run `xcodegen generate` after
+  changing `project.yml`. The generated project is gitignored, regenerated
+  fresh by every CI run and by anyone building locally.
 
 ### Layout
 
 ```
-Package.swift            AdvocatraCore (+ AdvocatraCoreTests)
-AdvocatraCore/            pure-Swift mirror of packages/case + packages/billing
-AdvocatraCoreTests/       Swift Testing suites proving the same invariants
+project.yml               XcodeGen project definition
+Package.swift             AdvocatraCore (+ AdvocatraCoreTests)
+AdvocatraCore/             pure-Swift mirror of packages/case + packages/billing
+AdvocatraCoreTests/        Swift Testing suites proving the same invariants
                           as the TS unit tests (hand-ported, not shared code)
+Advocatra/App/             @main App struct, minimal DI
+Advocatra/Features/Home/   placeholder screen — real case-management UI is
+                          separate, not-yet-started work
+Advocatra/Resources/Info.plist
+Support/allowed-dependencies.txt   remote Swift package allow-list (empty so far)
+scripts/                   CI guard scripts (see Commands)
+.githooks/pre-commit        installed via `git config core.hooksPath .githooks`
 docs/architecture/TECHNICAL-DESIGN.md   mirrored copy
 ```
 
-`AdvocatraSync` (the `/api/v1`-equivalent client) and the SwiftUI app target
-are not yet created — see TECHNICAL-DESIGN.md's milestone order.
+`AdvocatraSync` (the `/api/v1`-equivalent client) is not yet created — see
+TECHNICAL-DESIGN.md's milestone order.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `swift test` | Swift Testing suites, works on Linux or macOS |
+| `xcodegen generate` | regenerate `Advocatra.xcodeproj` from `project.yml` |
+| `swift test` | Swift Testing logic suites (macOS or Linux container) |
+| `scripts/test.sh` | wrapper used locally and in CI |
+| `bash scripts/check-swift6.sh` | reject Swift 5 modes and concurrency escape hatches |
+| `bash scripts/check-observable.sh` | reject `ObservableObject` |
+| `bash scripts/check-seams.sh` | reject bare `Date()`/`UUID()` in `AdvocatraCore` |
+| `bash scripts/check-spdx.sh` | every authored file carries the AGPL SPDX header |
+| `bash scripts/check-licenses.sh` | remote Swift packages must be allowlisted with a permissive licence |
+| `bash scripts/check-workflows.sh` | actionlint over `.github/workflows/` |
+
+Do not start or boot a simulator unless the owner explicitly asks. CI
+compiles for generic iOS and runs logic tests on a macOS runner; the Linux
+container job covers portable logic.
 
 ## Test-first, always
 
@@ -77,27 +98,62 @@ are not yet created — see TECHNICAL-DESIGN.md's milestone order.
 
 ## Git and GitHub workflow
 
-- One task, one small branch, one PR, squash merge. Never push to `main`.
+- **One task, one small branch, one PR, squash merge. Never push to `main`.**
+  Use the `gh` CLI for every GitHub action.
+- Install hooks with `git config core.hooksPath .githooks`; pre-commit runs
+  `swift test`.
+
+## TestFlight (automatic, owner-merge-gated)
+
+- `.github/workflows/testflight.yml` fires on every push to `main` (i.e.
+  every merged PR). A gate job checks whether the merge came from a pull
+  request authored by `johnarleyburns`; direct pushes and PRs from anyone
+  else are skipped, logged via `::notice`, not silently ignored.
+- Before archiving, a "Preflight secrets" step checks all eight required
+  secrets and skips the archive/upload steps (reporting exactly which
+  secret is missing) rather than failing opaquely if any aren't set yet.
+- Required secrets: `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`,
+  `APP_STORE_CONNECT_API_KEY_P8_BASE64`, `BUILD_CERTIFICATE_BASE64`,
+  `BUILD_PROVISION_PROFILE_BASE64`, `DEVELOPMENT_TEAM_ID`,
+  `KEYCHAIN_PASSWORD`, `P12_PASSWORD`.
 
 ## Hard limits for agents
 
-1. **Never deploy, tag, or upload to TestFlight, and never touch secrets,
-   environments or rulesets**, without an explicit, one-time owner request
-   for that specific action.
-2. Never add a GPL/AGPL dependency or copy GPL code.
-3. Never commit keys, tokens, or any real taxpayer/client data.
-4. Never guess a missing decision; stop and ask, or record it in
+1. **Never deploy, tag, or upload to TestFlight by hand, and never touch
+   secrets, environments or rulesets unless the owner explicitly asks.**
+   Open PRs only. TestFlight uploads are automatic as described above —
+   that automation is the one exception, and it only fires through a
+   merged, owner-authored PR, never a direct agent action.
+2. Never create or modify the `ios-release` environment, App Store Connect
+   keys, certificates, provisioning profiles, branch protection or Actions
+   secrets without an explicit owner request. (The current secrets were
+   set once, this way, from files the owner handed over — see Status.)
+3. Never add a GPL/AGPL dependency or copy GPL code.
+4. Never commit keys, tokens, certificates, provisioning profiles, or any
+   real taxpayer/client data.
+5. Never guess a missing decision; stop and ask, or record it in
    `TECHNICAL-DESIGN.md` §9.
-5. Never invent web/Android behaviour: schema changes come from the web repo.
-6. Never run a simulator unless the owner asks.
+6. Never invent web/Android behaviour: schema changes come from the web repo.
+7. Never run a simulator unless the owner asks.
 
 ## Definition of done (every PR)
 
-- A test failed first and passes now; `swift test` is green with no warnings.
-- No secrets, environments, rulesets, tags or TestFlight uploads touched.
+- A test failed first and passes now; compile, tests and guards are green
+  with no warnings.
+- No secrets, environments, rulesets, tags or manual TestFlight uploads
+  touched.
 
 ## Status
 
-Foundational scaffold: `AdvocatraCore` mirrors the web repo's case/billing
-schema, with Swift Testing suites proving the key invariants. No storage,
-sync, or UI yet.
+`AdvocatraCore` mirrors the web repo's case/billing schema, with Swift
+Testing suites proving the key invariants. CI/CD is set up: `ci.yml`
+(Linux portable-logic job, Apple unsigned-compile job, actionlint job) and
+`testflight.yml` (owner-merge-gated, secrets-preflight-gated). The app
+target (`Advocatra/`) is a placeholder shell — one screen, enough to
+compile and archive — not real case-management UI.
+
+Secrets set on this repo (from files the owner provided, read once, never
+committed): `DEVELOPMENT_TEAM_ID`, `BUILD_PROVISION_PROFILE_BASE64`,
+`APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_API_KEY_P8_BASE64`,
+`KEYCHAIN_PASSWORD`. Still missing, so TestFlight upload currently no-ops:
+`APP_STORE_CONNECT_ISSUER_ID`, `BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`.
