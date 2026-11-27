@@ -1,0 +1,22 @@
+Advocatra for iPhone
+Copyright (C) 2026 John Arley Burns
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, version 3 only. See LICENSE.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+References and credits
+----------------------
+
+Advocatra is an independent implementation. It contains no code copied from
+any other project. Its architecture is consciously modeled on the public
+design of Saldima for iPhone (https://github.com/johnarleyburns/saldima-ios),
+an unrelated accounting product by the same author. No Saldima code is
+linked into or shipped with Advocatra.
+
+Dependencies bundled with Advocatra must be MIT, BSD, Apache-2.0, ISC, 0BSD or
+CC0; CI enforces this.
