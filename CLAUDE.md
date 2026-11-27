@@ -152,8 +152,23 @@ Testing suites proving the key invariants. CI/CD is set up: `ci.yml`
 target (`Advocatra/`) is a placeholder shell — one screen, enough to
 compile and archive — not real case-management UI.
 
-Secrets set on this repo (from files the owner provided, read once, never
-committed): `DEVELOPMENT_TEAM_ID`, `BUILD_PROVISION_PROFILE_BASE64`,
-`APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_API_KEY_P8_BASE64`,
-`KEYCHAIN_PASSWORD`. Still missing, so TestFlight upload currently no-ops:
-`APP_STORE_CONNECT_ISSUER_ID`, `BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`.
+All eight TestFlight secrets are now set, per an explicit owner request for
+each piece added this round:
+`DEVELOPMENT_TEAM_ID`/`BUILD_PROVISION_PROFILE_BASE64`/`APP_STORE_CONNECT_KEY_ID`/
+`APP_STORE_CONNECT_API_KEY_P8_BASE64`/`KEYCHAIN_PASSWORD` (from files the
+owner provided, read once, never committed) plus `APP_STORE_CONNECT_ISSUER_ID`
+(given directly by the owner) and `BUILD_CERTIFICATE_BASE64`/`P12_PASSWORD`
+(a brand-new Apple Distribution certificate, generated end to end on this
+machine — RSA key + CSR via `openssl`, signed by Apple through the App
+Store Connect API using the existing API key, packaged into a `.p12` —
+since the owner explicitly asked for that specific action).
+
+The original `BUILD_PROVISION_PROFILE_BASE64` (from the owner's
+`.mobileprovision`) embedded only a pre-existing certificate whose private
+key was never available here, so it couldn't sign with the new
+certificate. With the owner's explicit go-ahead, the stale profile was
+deleted and replaced via the same API with one bound to the new
+certificate (verified: embedded certificate serial matches the new
+cert's). This is the one exception to hard limit #2's default — every
+certificate/profile action here was a specific, explicit owner request,
+not an agent judgment call.
