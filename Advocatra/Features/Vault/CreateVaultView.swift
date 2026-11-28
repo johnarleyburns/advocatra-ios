@@ -8,7 +8,7 @@ struct CreateVaultView: View {
         Form {
             Section {
                 Text(
-                    "No vault exists yet for this account. Choose a passphrase to encrypt it — "
+                    "No vault exists on this device yet. Choose a passphrase to encrypt it — "
                         + "Advocatra never sees it, and there is no way to recover it if you lose "
                         + "both it and the recovery code you'll be shown next."
                 )

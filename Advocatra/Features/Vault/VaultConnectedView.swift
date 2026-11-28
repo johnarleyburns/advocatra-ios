@@ -3,7 +3,9 @@ import AdvocatraVault
 import SwiftUI
 
 struct VaultConnectedView: View {
+    @Bindable var model: VaultFlowViewModel
     let summary: VaultRecordsSummary
+    @State private var showingCloudSync = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -12,7 +14,7 @@ struct VaultConnectedView: View {
                 .foregroundStyle(.green)
             Text("Vault connected")
                 .font(.title2.bold())
-            Text("Decrypted entirely on this device. Advocatra's servers never see a passphrase, a key, or your unencrypted data.")
+            Text("Stored and decrypted entirely on this device. Nothing leaves your phone unless you turn on cloud sync.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -26,9 +28,27 @@ struct VaultConnectedView: View {
                 summaryRow("Activity", summary.activityCount)
             }
             .padding(.top, 8)
+            if let message = model.cloudSyncResultMessage {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
+            }
         }
         .padding()
         .navigationTitle("Advocatra")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Enable Cloud Sync") { showingCloudSync = true }
+            }
+        }
+        .sheet(isPresented: $showingCloudSync) {
+            NavigationStack {
+                SignInView(model: model)
+            }
+        }
     }
 
     @ViewBuilder
@@ -41,5 +61,5 @@ struct VaultConnectedView: View {
 }
 
 #Preview {
-    VaultConnectedView(summary: .empty)
+    VaultConnectedView(model: VaultFlowViewModel(), summary: .empty)
 }

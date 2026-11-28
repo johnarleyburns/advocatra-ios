@@ -1,11 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import SwiftUI
 
+/// Optional and separate from the local vault — reached only via
+/// VaultConnectedView's "Enable Cloud Sync" action, never the app's
+/// entry point. See VaultFlowViewModel.enableCloudSync.
 struct SignInView: View {
     @Bindable var model: VaultFlowViewModel
 
     var body: some View {
         Form {
+            Section {
+                Text("Your vault already works fully offline. This backs up your vault key to the cloud so it can sync across devices later — it's optional.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
             Section("Tenant") {
                 TextField("janedoe.advocatra.com", text: $model.tenantHost)
                     .textContentType(.URL)
@@ -32,12 +40,12 @@ struct SignInView: View {
                 Text(errorMessage).foregroundStyle(.red)
             }
             Section {
-                Button("Sign In") {
-                    Task { await model.signIn() }
+                Button("Enable Cloud Sync") {
+                    Task { await model.enableCloudSync() }
                 }
                 .disabled(model.isLoading || model.tenantHost.isEmpty || model.email.isEmpty || model.password.isEmpty)
             }
         }
-        .navigationTitle("Sign In")
+        .navigationTitle("Cloud Sync")
     }
 }
