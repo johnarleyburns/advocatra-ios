@@ -5,7 +5,7 @@ cd "${CI_VALIDATE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 matches="$(
     grep -REn 'ObservableObject|@ObservedObject|@StateObject' \
-        Advocatra AdvocatraCore AdvocatraCoreTests \
+        Advocatra AdvocatraCore AdvocatraCoreTests AdvocatraVault AdvocatraVaultTests \
         --include='*.swift' || true
 )"
 if [ -n "$matches" ]; then

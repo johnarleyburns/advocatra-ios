@@ -34,13 +34,26 @@ representation case management tool. The web/cloud track is
 
 ```
 project.yml               XcodeGen project definition
-Package.swift             AdvocatraCore (+ AdvocatraCoreTests)
+Package.swift             AdvocatraCore (+ Tests) and, Apple-only
+                          (`#if canImport(Darwin)`), AdvocatraVault (+ Tests)
 AdvocatraCore/             pure-Swift mirror of packages/case + packages/billing
 AdvocatraCoreTests/        Swift Testing suites proving the same invariants
                           as the TS unit tests (hand-ported, not shared code)
+AdvocatraVault/             real createVault/unlockVaultWith*, the cloud
+                          client (login, GET/PUT /vault/manifest, GET
+                          /vault/snapshot), and Keychain storage of the
+                          unwrapped master key — CryptoKit/Security, so
+                          Apple-only; see TECHNICAL-DESIGN.md §5
+AdvocatraVaultTests/        round-trip tests plus hardcoded cross-platform
+                          vectors (from advocatra's
+                          scripts/generate-vault-fixtures.mjs) proving
+                          byte-identical output against the real web
+                          implementation — see CrossPlatformFixtureTests.swift
 Advocatra/App/             @main App struct, minimal DI
-Advocatra/Features/Home/   placeholder screen — real case-management UI is
-                          separate, not-yet-started work
+Advocatra/Features/Vault/  sign in -> create-or-unlock vault -> connected;
+                          read-only (no upload/lease yet). Real
+                          case-management UI beyond this is separate,
+                          not-yet-started work
 Advocatra/Resources/Info.plist
 Support/allowed-dependencies.txt   remote Swift package allow-list (empty so far)
 scripts/                   CI guard scripts (see Commands)
@@ -48,8 +61,10 @@ scripts/                   CI guard scripts (see Commands)
 docs/architecture/TECHNICAL-DESIGN.md   mirrored copy
 ```
 
-`AdvocatraSync` (the `/api/v1`-equivalent client) is not yet created — see
-TECHNICAL-DESIGN.md's milestone order.
+`AdvocatraVault/Networking/AdvocatraCloudClient.swift` covers login and the
+vault manifest/snapshot routes. Uploading a snapshot (lease acquisition,
+`POST /vault/snapshot`) is still not implemented — see TECHNICAL-DESIGN.md's
+milestone order.
 
 ## Commands
 
@@ -148,9 +163,25 @@ container job covers portable logic.
 `AdvocatraCore` mirrors the web repo's case/billing schema, with Swift
 Testing suites proving the key invariants. CI/CD is set up: `ci.yml`
 (Linux portable-logic job, Apple unsigned-compile job, actionlint job) and
-`testflight.yml` (owner-merge-gated, secrets-preflight-gated). The app
-target (`Advocatra/`) is a placeholder shell — one screen, enough to
-compile and archive — not real case-management UI.
+`testflight.yml` (owner-merge-gated, secrets-preflight-gated).
+
+The real vault now exists on iOS: `AdvocatraVault` (Apple-only, gated by
+`#if canImport(Darwin)` in `Package.swift` so Linux's `swift test` simply
+doesn't see it) has `createVault`/`unlockVaultWithPassphrase`/
+`unlockVaultWithRecoveryCode`, independently implemented against
+CryptoKit — verified byte-identical to the real web implementation where
+cross-platform interop matters (not just internally consistent), via
+hardcoded vectors from `advocatra`'s `scripts/generate-vault-fixtures.mjs`
+in `AdvocatraVaultTests/CrossPlatformFixtureTests.swift`. The wrap step is
+AES-256-GCM, not AES-KW — CryptoKit has no AES-KW primitive, so both
+platforms switched (see `advocatra`'s `TECHNICAL-DESIGN.md` §5).
+`AdvocatraCloudClient` logs in and talks to `GET`/`PUT /vault/manifest`
+and `GET /vault/snapshot`; the unwrapped master key is stored in the
+Keychain gated by biometrics/passcode (`VaultKeychain`, untestable in CI —
+needs manual verification on a real device). The app target
+(`Advocatra/Features/Vault/`) drives sign-in → create-or-unlock → a
+"connected" screen showing decrypted record counts — read-only, no
+upload/lease yet.
 
 All eight TestFlight secrets are now set, per an explicit owner request for
 each piece added this round:
@@ -172,3 +203,10 @@ certificate (verified: embedded certificate serial matches the new
 cert's). This is the one exception to hard limit #2's default — every
 certificate/profile action here was a specific, explicit owner request,
 not an agent judgment call.
+
+Not yet done: uploading a snapshot from iOS (lease acquisition, `POST
+/vault/snapshot`), real case-management UI beyond the "connected" summary
+screen, and attachment/document content. `VaultKeychain`'s actual
+Keychain read/write needs manual verification on a real device — a
+headless CI runner has no way to satisfy a `.userPresence` biometric
+prompt, so it isn't exercised by `AdvocatraVaultTests`.
