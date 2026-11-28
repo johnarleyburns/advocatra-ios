@@ -32,6 +32,8 @@ targets:
     dependencies:
       - package: Advocatra
         product: AdvocatraCore
+      - package: Advocatra
+        product: AdvocatraVault
     info:
       path: Advocatra/Resources/Info.plist
       properties:
@@ -40,6 +42,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         AdvocatraSourceCommit: "$(ADVOCATRA_SOURCE_COMMIT)"
         ITSAppUsesNonExemptEncryption: false
+        NSFaceIDUsageDescription: Unlock your vault's stored key without re-entering your passphrase.
         UIDesignRequiresCompatibility: false
         UILaunchScreen: {}
         UIApplicationSupportsIndirectInputEvents: true

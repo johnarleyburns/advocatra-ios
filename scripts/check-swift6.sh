@@ -18,7 +18,7 @@ fi
 
 escape_hatches="$(
     grep -REn 'nonisolated\(unsafe\)|MainActor\.assumeIsolated|@unchecked Sendable' \
-        Advocatra AdvocatraCore AdvocatraCoreTests \
+        Advocatra AdvocatraCore AdvocatraCoreTests AdvocatraVault AdvocatraVaultTests \
         --include='*.swift' || true
 )"
 if [ -n "$escape_hatches" ]; then

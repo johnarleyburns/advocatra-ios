@@ -5,7 +5,7 @@ import SwiftUI
 struct AdvocatraApp: App {
     var body: some Scene {
         WindowGroup {
-            HomeView()
+            VaultFlowView()
         }
     }
 }

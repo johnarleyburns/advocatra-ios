@@ -22,6 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Unlock your vault's stored key without re-entering your passphrase.</string>
 	<key>AdvocatraSourceCommit</key>
 	<string>$(ADVOCATRA_SOURCE_COMMIT)</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
