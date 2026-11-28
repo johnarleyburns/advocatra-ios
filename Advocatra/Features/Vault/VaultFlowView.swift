@@ -9,19 +9,22 @@ struct VaultFlowView: View {
         NavigationStack {
             Group {
                 switch model.stage {
-                case .signIn:
-                    SignInView(model: model)
+                case .bootstrapping:
+                    ProgressView()
                 case .createVault:
                     CreateVaultView(model: model)
-                case .unlockVault:
+                case .locked:
                     UnlockVaultView(model: model)
                 case let .showRecoveryCode(code):
                     RecoveryCodeView(model: model, recoveryCode: code)
                 case let .connected(summary):
-                    VaultConnectedView(summary: summary)
+                    VaultConnectedView(model: model, summary: summary)
                 }
             }
             .navigationTitle("Advocatra")
+        }
+        .task {
+            await model.bootstrap()
         }
     }
 }

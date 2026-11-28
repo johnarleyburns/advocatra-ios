@@ -50,9 +50,12 @@ AdvocatraVaultTests/        round-trip tests plus hardcoded cross-platform
                           byte-identical output against the real web
                           implementation — see CrossPlatformFixtureTests.swift
 Advocatra/App/             @main App struct, minimal DI
-Advocatra/Features/Vault/  sign in -> create-or-unlock vault -> connected;
-                          read-only (no upload/lease yet). Real
-                          case-management UI beyond this is separate,
+Advocatra/Features/Vault/  create-or-unlock the local vault -> connected;
+                          no sign-in, no network, in that default path.
+                          Cloud sync is a separate, optional action from
+                          the connected screen. Read-only (no
+                          upload/lease yet). Real case-management UI
+                          beyond this is separate,
                           not-yet-started work
 Advocatra/Resources/Info.plist
 Support/allowed-dependencies.txt   remote Swift package allow-list (empty so far)
@@ -165,23 +168,38 @@ Testing suites proving the key invariants. CI/CD is set up: `ci.yml`
 (Linux portable-logic job, Apple unsigned-compile job, actionlint job) and
 `testflight.yml` (owner-merge-gated, secrets-preflight-gated).
 
-The real vault now exists on iOS: `AdvocatraVault` (Apple-only, gated by
-`#if canImport(Darwin)` in `Package.swift` so Linux's `swift test` simply
-doesn't see it) has `createVault`/`unlockVaultWithPassphrase`/
-`unlockVaultWithRecoveryCode`, independently implemented against
-CryptoKit — verified byte-identical to the real web implementation where
-cross-platform interop matters (not just internally consistent), via
-hardcoded vectors from `advocatra`'s `scripts/generate-vault-fixtures.mjs`
-in `AdvocatraVaultTests/CrossPlatformFixtureTests.swift`. The wrap step is
+The real vault now exists on iOS, **local-first** per
+`advocatra`'s `TECHNICAL-DESIGN.md` §5 ("Vault lives: on-device,
+authoritative; optionally also synced to the cloud") — an earlier version
+of this got that backwards (required cloud sign-in before any vault could
+exist at all) and was corrected once the mismatch was caught.
+`AdvocatraVault` (Apple-only, gated by `#if canImport(Darwin)` in
+`Package.swift` so Linux's `swift test` simply doesn't see it) has
+`createVault`/`unlockVaultWithPassphrase`/`unlockVaultWithRecoveryCode`,
+independently implemented against CryptoKit — verified byte-identical to
+the real web implementation where cross-platform interop matters (not
+just internally consistent), via hardcoded vectors from `advocatra`'s
+`scripts/generate-vault-fixtures.mjs` in
+`AdvocatraVaultTests/CrossPlatformFixtureTests.swift`. The wrap step is
 AES-256-GCM, not AES-KW — CryptoKit has no AES-KW primitive, so both
 platforms switched (see `advocatra`'s `TECHNICAL-DESIGN.md` §5).
-`AdvocatraCloudClient` logs in and talks to `GET`/`PUT /vault/manifest`
-and `GET /vault/snapshot`; the unwrapped master key is stored in the
-Keychain gated by biometrics/passcode (`VaultKeychain`, untestable in CI —
-needs manual verification on a real device). The app target
-(`Advocatra/Features/Vault/`) drives sign-in → create-or-unlock → a
-"connected" screen showing decrypted record counts — read-only, no
-upload/lease yet.
+
+`AdvocatraVault/Storage/LocalVaultStore.swift` is the on-device vault
+(manifest + optional encrypted snapshot, plain JSON in Application
+Support, excluded from iCloud backup). The app target
+(`Advocatra/Features/Vault/`) boots straight into create-or-unlock the
+*local* vault — no network call, no sign-in screen, ever, in that path.
+Returning launches try the Keychain-stored key first (prompting Face
+ID/Touch ID/passcode automatically via `VaultKeychain`'s
+`.userPresence` access control — untestable in CI, needs manual
+verification on a real device), falling back to manual passphrase/
+recovery-code entry. `AdvocatraCloudClient` (login, `GET`/`PUT
+/vault/manifest`, `GET /vault/snapshot`) is wired to a separate,
+explicit, optional "Enable Cloud Sync" action on the connected screen —
+it seeds the cloud's manifest from the local one if the account doesn't
+already have a vault, and reports (doesn't resolve) a conflict otherwise.
+Still read-only beyond that: no snapshot upload/lease yet, and "cloud
+sync" today only backs up the vault *key*, not case data.
 
 All eight TestFlight secrets are now set, per an explicit owner request for
 each piece added this round:
