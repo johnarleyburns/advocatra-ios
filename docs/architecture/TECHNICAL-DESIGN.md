@@ -105,9 +105,11 @@ billing/
   payments/             Payment records
 ```
 
-This is a conceptual layout. The browser implementation uses IndexedDB
-stores with the same logical shape; the native implementations use an
-on-disk directory (iOS: Application Support; Android: app-private storage).
+This is a conceptual layout, realized on-disk on iOS/Android (iOS:
+Application Support; Android: app-private storage) and, for the web client,
+realized only as the decrypted-in-memory shape of whatever snapshot the
+cloud API just returned — the browser has no local-first copy of this
+layout at all (see §5).
 
 ### Core objects (representative fields, not exhaustive)
 
@@ -157,16 +159,29 @@ fields manually; there is no DAWSON integration in scope.
 
 ## 5. Local persistence and encryption
 
-### Storage adapters
+### Storage model per platform
+
+This corrects an earlier draft of this document, which carried over a
+browser-has-its-own-local-vault model from an initial sketch. That is not
+the agreed design: **the web client has no local-first vault at all.** It
+is a full-featured but cloud-dependent client — same features as the native
+apps, no offline mode, nothing durable in IndexedDB/localStorage beyond
+per-viewer conveniences. iOS and Android are the local-first platforms.
 
 | Operation | Browser | iOS/Android |
 | --- | --- | --- |
-| Create vault | IndexedDB | app-private directory |
-| Open vault | browser database | local directory |
-| Add document | file upload | filesystem/photo picker |
-| Export vault | download archive | save archive |
-| Import vault | upload archive | open archive |
-| Cloud sync | encrypted upload/download | encrypted upload/download |
+| Vault lives | only in the cloud (encrypted) | on-device, authoritative; optionally also synced to the cloud |
+| Open vault | passphrase unlock → fetch encrypted snapshot from the cloud API → decrypt in-memory | passphrase/biometric unlock → decrypt the on-device vault directly |
+| Add document | upload; encrypted client-side before the request leaves the browser | filesystem/photo picker; encrypted before being written to disk |
+| Export vault | download the decrypted-then-re-encrypted-for-export archive for this session only | save a portable archive from the on-device vault, any time, no network |
+| Import vault | n/a (there is nothing local to import into) | open archive, decrypt, replace or merge the on-device vault |
+| Working offline | not supported — no cloud, no client | fully supported; this is the normal mode |
+| Cloud sync | the client's only mode of operation | optional; snapshot upload/download per §7 |
+
+A browser session with no network and no account is not a degraded version
+of the product — it is simply the product you can't currently use there.
+This is why the cloud subscription is "optional" for the native apps but
+effectively required to do anything useful on the web.
 
 ### Encryption, every platform
 
@@ -174,18 +189,37 @@ Account authentication (email/password, Stripe subscription) is **always
 separate** from vault encryption. The account password never becomes, or
 derives, the encryption key.
 
-Key hierarchy:
+Key hierarchy, implemented in `packages/crypto`/`packages/vault`, ported
+from Saldima's own shipped zero-knowledge design (`packages/crypto`'s
+`recovery.ts`/`vault-key.ts`/`passphrase-kdf.ts` and
+`apps/web/src/client/vault.ts` there — not invented fresh):
 
-- A random **vault master key**.
+- A random **vault master key** (`generateVaultMasterKeyMaterial`).
 - Separate derived keys for the record index and for document objects
-  (HKDF from the master key, distinct `info` strings per purpose).
-- Per-object random nonces; AES-256-GCM (authenticated encryption)
-  everywhere.
-- The vault master key itself is wrapped by a key-encryption key (KEK)
-  derived from the user's passphrase via Argon2id where available, or
-  PBKDF2 (high iteration count) via native Web Crypto where Argon2id isn't
-  practically available — flagged as an open risk in section 9; do not
-  invent a custom KDF.
+  (HKDF from the master key, distinct `info` strings per purpose —
+  `deriveDataKey`).
+- Per-object random nonces; AES-256-GCM everywhere, and every envelope's
+  ciphertext is bound to `{ vaultId, purpose, schemaVersion }` as
+  authenticated additional data (`EnvelopeAad`), so a valid envelope for
+  one vault or purpose can't be replayed as another's.
+- The vault master key is wrapped **two independent ways**, stored
+  together in the manifest's `keyEnvelope` (`packages/vault/src/manifest.ts`):
+  a passphrase-derived KEK (PBKDF2-SHA256, 600,000 iterations — Argon2id
+  remains preferred if/when an audited WASM implementation is adopted, see
+  §9) and a recovery-code-derived KEK (HKDF directly over a 20-byte random
+  code, Crockford base32, grouped for transcription — no PBKDF2 needed,
+  the code is already high-entropy machine output, not a human passphrase).
+  Either secret alone unlocks the vault; losing both makes it permanently
+  unrecoverable, by construction — the whole point of zero-knowledge. The
+  wrap step itself is **AES-256-GCM** (a random 12-byte IV, output stored
+  as `iv || ciphertext+tag`) rather than Web Crypto's AES-KW: the manifest
+  is shared across every client of one tenant (web, iOS, Android, MCP),
+  and Apple's CryptoKit has no AES-KW primitive, so AES-GCM is the one
+  AEAD every platform's crypto library exposes — and it's a more literal
+  reading of "AES-256-GCM everywhere" than AES-KW ever was.
+  `createVault`/`unlockVaultWithPassphrase`/`unlockVaultWithRecoveryCode`
+  in `packages/vault/src/vault-access.ts` are the only entry points; no
+  client should hand-roll this sequence itself.
 - Versioned encryption metadata on every object, so the format can evolve
   without breaking old vaults.
 
@@ -194,14 +228,8 @@ Keychain/Keystore-held key, unlocked by device passcode/biometric or an
 app passphrase) — a deliberate departure from Saldima, whose iOS/Android
 local `.gnucash` file is unencrypted by Saldima's own explicit design
 decision. Advocatra cannot make that same call given the sensitivity of the
-data it stores.
-
-The recovery process is a product decision that must be nailed down before
-accepting real client data: losing the encryption key must not let
-Advocatra's own operator decrypt the vault (that is the whole point of the
-zero-knowledge claim), which means key loss is also, by construction,
-unrecoverable unless the user set up an explicit recovery mechanism they
-control (e.g., a printed recovery code) ahead of time.
+data it stores. The iOS/Android ports of `createVault`/`unlockVault*` are
+not yet written — see §9.
 
 ## 6. Billing, engagements and fee schedules
 
@@ -214,9 +242,12 @@ themselves confidential).
 
 - **FeeSchedule** — the firm's published rate card, versioned.
   `effectiveDate`, `publishedAt`, `guaranteeDays` (default 30 — see the
-  invariant below), line items: `{ serviceCode, label, pricingType:
+  invariant below), line items: `{ id, serviceCode, label, pricingType:
   "flat"|"hourly", amount }` (e.g. `1040-W2` flat $80, `1040-SCHC-INVEST`
-  flat $500, `HOURLY-STANDARD` hourly rate).
+  flat $500, `HOURLY-STANDARD` hourly rate). `id` is what
+  `Engagement.quotedFromLineItemId` (below) actually points at — without
+  it there's nothing for that traceability link to reference, a gap an
+  audit of this repo caught (the schema had no `id` field until then).
 - **Engagement** — the actual commitment made to one client: taxpayerId,
   optional matterId, taxYear, description, pricingType
   (`flat`\|`hourly`\|`retainer`), committedAmount or hourlyRate, and a
@@ -280,6 +311,11 @@ vault makes the problem much easier than general multi-writer sync.
   deferred, same as Saldima defers it. The application tells the user to
   pull the newer revision first.
 
+For the web client specifically, "open the vault" and "pull the latest
+snapshot" are the same operation, and "save" and "push a new revision" are
+the same operation — there is no separate local vault state to reconcile
+against, consistent with §5's "web has no local-first vault."
+
 ## 8. Repository layout
 
 ```
@@ -287,13 +323,18 @@ advocatra/                     # web/cloud, TypeScript
   apps/web/                    # Cloudflare Workers, Hono
   packages/case/                # canonical case schema (pure TS)
   packages/billing/              # canonical billing schema (pure TS)
-  packages/crypto/               # Web Crypto wrappers (added when storage lands)
-  packages/sync/                 # snapshot sync client (added later)
+  packages/crypto/               # Web Crypto key hierarchy (passphrase KDF, wrap/unwrap, HKDF, AEAD envelope)
+  packages/vault/                # manifest + snapshot assembly on top of packages/crypto
+  packages/sync/                 # revision + lease logic (pure); no Workers/DO wiring yet
+  packages/testkit/              # fakes (Clock, IdGenerator, KV, SQL, fetch, email) for every package/app above
   docs/architecture/TECHNICAL-DESIGN.md   # this document
 
 advocatra-ios/                 # native Swift/SwiftUI
   AdvocatraCore/                # pure-Swift mirror of case + billing schema
-  AdvocatraSync/                # snapshot sync client (added later)
+  AdvocatraVault/                # vault crypto, on-device storage, and the cloud
+                                # networking client (login, vault manifest/snapshot) --
+                                # no separate AdvocatraSync module; that responsibility
+                                # lives here instead
   Advocatra/                    # SwiftUI app
   docs/architecture/TECHNICAL-DESIGN.md   # mirrored copy
 
@@ -303,6 +344,9 @@ advocatra-android/              # native Kotlin/Compose
   app/                           # Compose app
   docs/architecture/TECHNICAL-DESIGN.md   # mirrored copy
 
+advocatra-mcp/                  # local, read-only MCP server (Claude/opencode) over a
+                                # decrypted vault snapshot -- a fourth real client of
+                                # the cloud API, not just a future port target
 advocatra-case-verifier/        # deferred to M3: cross-platform fixture parity
 ```
 
@@ -315,9 +359,22 @@ advocatra-case-verifier/        # deferred to M3: cross-platform fixture parity
   regardless of citation, but the default `guaranteeDays` value and any
   jurisdiction-specific wording in the UI should match the real rule.
 - **Argon2id in the browser.** Web Crypto's native KDFs are PBKDF2 and
-  HKDF; Argon2id requires a WASM dependency. Decide and vet that dependency
-  (license, audit status) before the encryption milestone, rather than
-  defaulting to a weaker PBKDF2-only scheme silently.
+  HKDF; Argon2id requires a WASM dependency. `packages/vault`'s
+  `createVault` uses PBKDF2-SHA256 at 600,000 iterations today — the
+  documented fallback, not an invented scheme (same constant Saldima
+  ships) — but Argon2id remains preferred if/when an audited WASM
+  implementation is vetted (license, audit status) for adoption.
+- **iOS/Android/MCP ports of `createVault`/`unlockVaultWithPassphrase`/
+  `unlockVaultWithRecoveryCode` don't exist yet.** The web repo
+  (`packages/crypto`/`packages/vault`) is the only place the crypto for
+  creating or unlocking a vault exists today. The server-side storage half
+  is done — `GET`/`PUT /vault/manifest` on the `Vault` DO (opaque,
+  session-gated, ported from Saldima's `/app/vault/keys`) — so any client
+  can now store/fetch the manifest; what's missing is each client doing
+  the local `createVault`/`unlockVaultWith*` sequence itself. Every client
+  — the native apps, and any future local MCP server — needs its own
+  hand-port of this exact sequence (no shared code, same as the rest of
+  this project), not a reinvention of it.
 - **StoreKit/Play Billing.** If the native apps ever surface the $20/mo or
   $200/yr hosted plan for purchase *inside* the app, Apple/Google may
   require it be sold through their in-app purchase systems (30% platform
@@ -338,3 +395,18 @@ advocatra-case-verifier/        # deferred to M3: cross-platform fixture parity
   platforms is maintained by hand-review, not by an automated check. Treat
   any schema change as incomplete until it has been applied to all three
   repos in the same logical change.
+- **Account authentication: resolved, implemented.** Mirrors Saldima's
+  actual mechanism exactly — PBKDF2 password hashing (100,000 iterations,
+  Cloudflare Workers' WebCrypto hard cap), session cookies, TOTP 2FA,
+  per-tenant vanity-subdomain provisioning via KV. See `apps/web/src/auth.ts`,
+  `signup.ts`, `provision.ts`, `accounts.ts`, `vault-do.ts`.
+- **Stripe product/price setup: done for dev, test mode only.** "Advocatra
+  Monthly Subscription" ($20/mo) and "Advocatra Annual Subscription"
+  ($200/yr) exist under the same arleyxu financial services Stripe account
+  Saldima uses, created by the owner directly in the Stripe dashboard. A
+  webhook endpoint for `https://dev.advocatra.com/webhook/stripe` exists
+  and its signing secret, plus the Stripe secret key, are set as
+  `wrangler secret`s on `advocatra-dev` (never committed). Live-mode
+  products/prices and staging/production webhook endpoints are not yet
+  created — do that when those environments are actually being stood up,
+  not preemptively.
